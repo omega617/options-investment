@@ -5,8 +5,9 @@ from bokeh.plotting import figure, output_file, show, gridplot
 from bokeh.models import HoverTool, BoxSelectTool
 
 # FXA
-aud_amount = 100000
-aud_usd_rate = 0.72144
+aud_amount = 10000
+aud_usd_rate = 0.712907483
+
 usd_amount = aud_amount * aud_usd_rate
 
 price_range = np.arange(62, 80, 1)
@@ -14,9 +15,9 @@ price_range = np.arange(62, 80, 1)
 jul16_canned_prices = {62 : 10.6, 63 : 9.5, 64 : 8.4, 65 : 7.4, 66 : 6.4, 67 : 5.4, 68 : 4.4, 69 : 3.6,
                  70 : 2.8, 71 : 1.95, 72 : 1.35, 73 : 0.85, 74 : 0.6, 75 : 0.4, 76 : 0.3, 77 : 0.35,
                  78 : 0.35, 79 : 0.3, 80 : 0.3}
-sep16_canned_prices = {62 : 10.9, 63 : 9.9, 64 : 9.0, 65 : 8, 66 : 7, 67 : 6.1, 68 : 5.1, 69 : 4.3,
-                 70 : 3.4, 71 : 2.7, 72 : 2.1, 73 : 1.6, 74 : 1.2, 75 : 0.9, 76 : 0.7, 77 : 0.5,
-                 78 : 0.4, 79 : 0.5, 80 : 0.45}
+sep16_canned_prices = {62 : 10.7, 63 : 9.7, 64 : 8.7, 65 : 7.7, 66 : 6.8, 67 : 5.8, 68 : 5.0, 69 : 4.1,
+                 70 : 3.3, 71 : 2.6, 72 : 1.95, 73 : 1.45, 74 : 1.05, 75 : 0.8, 76 : 0.55, 77 : 0.45,
+                 78 : 0.35, 79 : 0.5, 80 : 0.45}
 # updated 30/5 from http://www.cboe.com/delayedquote/quotetable.aspx
 dec16_canned_prices = {62 : 10.6, 63 : 9.7, 64 : 8.7, 65 : 7.8, 66 : 6.9, 67 : 6.1, 68 : 5.2, 69 : 4.4,
                  70 : 3.7, 71 : 3.1, 72 : 2.55, 73 : 2.1, 74 : 1.65, 75 : 1.35, 76 : 1.05, 77 : 0.85,
@@ -80,7 +81,7 @@ def generate_scenarios(contract_sizes, prices):
     return graphs
 
 if __name__ == '__main__':
-    contract_sizes = [800, 1000, 1200, 1400, 1600]
+    contract_sizes = [80, 100, 120, 140, 160]
     graphs = []
     # output to static HTML file
     # output_file("jul16_fax_options.html", title="FXA protection")
@@ -88,15 +89,15 @@ if __name__ == '__main__':
     # # put all the plots in a grid layout
     # p = gridplot([[graphs[0], graphs[1]], [graphs[2], graphs[3]], [graphs[4], None]])
     # show(p)
-    #
-    # output_file("sep16_fax_options.html", title="FXA protection")
-    # graphs = generate_scenarios(contract_sizes, sep16_canned_prices)
-    # # put all the plots in a grid layout
-    # p = gridplot([[graphs[0], graphs[1]], [graphs[2], graphs[3]], [graphs[4], None]])
-    # show(p)
 
-    output_file("dec16_fax_options.html", title="FXA protection")
-    graphs = generate_scenarios(contract_sizes, dec16_canned_prices)
+    output_file("sep16_fax_options.html", title="FXA protection")
+    graphs = generate_scenarios(contract_sizes, sep16_canned_prices)
     # put all the plots in a grid layout
     p = gridplot([[graphs[0], graphs[1]], [graphs[2], graphs[3]], [graphs[4], None]])
     show(p)
+
+    # output_file("dec16_fax_options.html", title="FXA protection")
+    # graphs = generate_scenarios(contract_sizes, dec16_canned_prices)
+    # # put all the plots in a grid layout
+    # p = gridplot([[graphs[0], graphs[1]], [graphs[2], graphs[3]], [graphs[4], None]])
+    # show(p)
