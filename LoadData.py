@@ -7,12 +7,9 @@ import re
 import datetime
 from jinja2 import Environment, FileSystemLoader
 import math
-from weasyprint import HTML
 
-# def transform_frame(df):
-#     #
+year_for_analysis = 2011
 
-# hold a mapping from year-month to list of days with trading data
 class TradeDays:
     def __init__(self, ):
         self.yearmonth_day = {}
@@ -47,7 +44,8 @@ def load_spx_data():
     df = pd.read_excel(path+filename, index_col=0, header=0)
     return df
 
-def load_options_data():
+def load_options_data(month):
+    date_for_data = str(year_for_analysis) + str(month)
     path =r'C:/Temp/algoseek/TRADES_ONLY/' # use your path
     allOptionDataFilesZipped = glob.glob(path + "/*.csv.bz2")
     allOptionDataFilesZipped.sort()
@@ -55,7 +53,7 @@ def load_options_data():
     list_ = []
     days_with_options_data = TradeDays()
     for zippedOptionsDataFile_ in allOptionDataFilesZipped:
-        if zippedOptionsDataFile_.__contains__("2007"):
+        if zippedOptionsDataFile_.__contains__(str(date_for_data)):
             file_ = bz2.BZ2File(zippedOptionsDataFile_)
             df = pd.read_csv(file_,index_col=None, header=0)
             # extract the trade date from the zip file
@@ -71,70 +69,102 @@ def load_options_data():
             df['Day'] = Series(np.repeat(day, len(df)), index=df.index)
             days_with_options_data.add_day(year, month, day)
             list_.append(df)
-    return pd.concat(list_), days_with_options_data
+    options_data_frame = pd.concat(list_)
+    options_data_frame = options_data_frame.set_index(['Date'])
+    return options_data_frame, days_with_options_data
+
+def process_day(int_month, day, month_frame, day_stats, summary_stats):
+    day_date = pd.Period(datetime.datetime(year_for_analysis, int_month, day), freq='D')
+
+    day_frame = month_frame.loc[[day_date]]
+
+    day_stats.set_value(day_date, 'TotalTrades', day_frame.shape[0])
+    day_stats.set_value(day_date, 'MinStrike', day_frame.Strike.min() / 10000)
+    day_stats.set_value(day_date, 'MaxStrike', day_frame.Strike.max() / 10000)
+    day_stats.set_value(day_date, 'SPX', spx_data_frame[str(day_date)]['SPX'][0])
+
+    if day_frame.shape[0] == 0:
+        print "Empty Day : %s".format(str(day_date))
+        if summary_stats.loc[date].Empties == 0:
+            summary_stats.set_value(date, 'Empties', 1)
+        else:
+            empties = summary_stats.loc[date].Empties
+            summary_stats.set_value(date, 'Empties', empties+1)
+
+    if math.isnan(summary_stats.loc[date].MinTrades):
+        summary_stats.set_value(date, 'MinTrades', day_frame.shape[0])
+    else:
+        summary_stats.set_value(date, 'MinTrades', min(day_frame.shape[0], summary_stats.loc[date].MinTrades))
+
+    # Max is set to zero by default
+    summary_stats.set_value(date, 'MaxTrades', max(day_frame.shape[0], summary_stats.loc[date].MaxTrades))
+
+    # 'Under50', 'Under100', 'Under500', 'Under1000', 'Over1000'
+    if day_frame.shape[0] < 50:
+        under50 = summary_stats.loc[:(date, 'Under50')]
+        summary_stats.set_value(date, 'Under50', under50 + 1)
+    elif 50 < day_frame.shape[0] < 100:
+        under100 = summary_stats.loc[date].Under100
+        summary_stats.set_value(date, 'Under100', under100 + 1)
+    elif 100 < day_frame.shape[0] < 500:
+        under500 = summary_stats.loc[date]['Under500']
+        summary_stats.set_value(date, 'Under500', under500 + 1)
+    elif 500 < day_frame.shape[0] < 1000:
+        under1000 = summary_stats.loc[date]['Under1000']
+        summary_stats.set_value(date, 'Under1000', under1000 + 1)
+    elif day_frame.shape[0] > 1000:
+        over1000 = summary_stats.loc[date]['Over1000']
+        summary_stats.set_value(date, 'Over1000', over1000 + 1)
 
 if __name__ == '__main__':
     spx_data_frame = load_spx_data()
-    options_data_frame, days_with_options_data = load_options_data()
+    #options_data_frame, days_with_options_data = load_options_data()
 
     # to select an individual date use the following:
     # frame.loc[frame.Date == pd.to_datetime('20070606')]
-    columns = ['TotalTrades', 'MinTrades', 'MaxTrades', 'Empties']
-    summary_stats = pd.DataFrame(columns=columns, index=pd.PeriodIndex(start='1/2007', end='12/2007', freq='M'))
-    summary_stats.fillna({'TotalTrades':0, 'MaxTrades':0, 'Empties':0}, inplace=True)
+    columns = ['TotalTrades', 'MinTrades', 'MaxTrades', 'Empties', 'Under50', 'Under100', 'Under500', 'Under1000', 'Over1000']
+    summary_stats = pd.DataFrame(columns=columns, index=pd.PeriodIndex(start='1/{0}'.format(year_for_analysis), end='12/{0}'.format(year_for_analysis), freq='M'))
+    summary_stats.fillna({'TotalTrades':0, 'MaxTrades':0, 'Empties':0, 'Under50':0, 'Under100':0, 'Under500':0, 'Under1000':0, 'Over1000':0}, inplace=True)
 
-    day_dates = []
-    for month in sorted(set(options_data_frame.Month)):
+    months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+    list_ = []
+    for month in sorted(set(months)):
+        date = pd.Period(str(year_for_analysis)+'-' + month)
+        #month_frame = options_data_frame.loc[options_data_frame.Month == month]
+        month_frame, days_with_options_data = load_options_data(month)
         int_month = int(month)
-        for day in days_with_options_data.get_days(2007, int_month):
-            day_date = pd.Timestamp(datetime.datetime(2007, int_month, day))
+        day_dates = []
+        for day in days_with_options_data.get_days(year_for_analysis, int_month):
+            day_date = pd.Timestamp(datetime.datetime(year_for_analysis, int_month, day))
             day_dates.append(day_date)
-    day_columns = ['TotalTrades', 'MinStrike', 'MaxStrike', 'SPX']
-    day_stats = pd.DataFrame(columns=day_columns, index=pd.PeriodIndex(day_dates, freq='D'))
-    day_stats.fillna(0, inplace=True)
+        day_columns = ['TotalTrades', 'MinStrike', 'MaxStrike', 'SPX']
+        day_stats_ = pd.DataFrame(columns=day_columns, index=pd.PeriodIndex(day_dates, freq='D'))
+        day_stats_.fillna(0, inplace=True)
 
-    for month in sorted(set(options_data_frame.Month)):
-        date = pd.Period('2007-' + month)
-        month_frame = options_data_frame.loc[options_data_frame.Month == month]
         summary_stats.set_value(date, 'TotalTrades', month_frame.shape[0])
-        int_month = int(month)
-        for day in days_with_options_data.get_days(2007, int_month):
-            day_date = pd.Period(datetime.datetime(2007, int_month, day), freq='D')
-            day_frame = month_frame.loc[month_frame.Date == day_date]
+        for day in days_with_options_data.get_days(year_for_analysis, int_month):
+            process_day(int_month, day, month_frame, day_stats_, summary_stats)
 
-            day_stats.set_value(day_date, 'TotalTrades', day_frame.shape[0])
-            day_stats.set_value(day_date, 'MinStrike', day_frame.Strike.min() / 1000)
-            day_stats.set_value(day_date, 'MaxStrike', day_frame.Strike.max() / 1000)
-            day_stats.set_value(day_date, 'SPX', spx_data_frame[str(day_date)]['SPX'][0])
+        list_.append(day_stats_)
+    day_stats = pd.concat(list_)
 
-            if day_frame.shape[0] == 0:
-                print "Empty Day : %s".format(str(day_date))
-                if summary_stats.loc[date].Empties == 0:
-                    summary_stats.set_value(date, 'Empties', 1)
-                else:
-                    empties = summary_stats.loc[date].Empties
-                    summary_stats.set_value(date, 'Empties', empties+1)
-
-            if math.isnan(summary_stats.loc[date].MinTrades):
-                summary_stats.set_value(date, 'MinTrades', day_frame.shape[0])
-            else:
-                summary_stats.set_value(date, 'MinTrades', min(day_frame.shape[0], summary_stats.loc[date].MinTrades))
-
-            # Max is set to zero by default
-            summary_stats.set_value(date, 'MaxTrades', max(day_frame.shape[0], summary_stats.loc[date].MaxTrades))
 
     summary_stats.sort_index(inplace=True)
+    summary_stats.append(summary_stats.sum(numeric_only=True), ignore_index=True)
     print(summary_stats)
     day_stats.sort_index(inplace=True)
-    print(day_stats)
-    print('Max. strike for 2007: {0}').format(day_stats['MaxStrike'].max().max())
-    print('Min. strike for 2007: {0}').format(day_stats['MinStrike'].min().min())
+    # print(day_stats)
+    print('Max. strike for {1}: {0}').format(day_stats['MaxStrike'].max().max(), year_for_analysis)
+    print('Min. strike for {1}: {0}').format(day_stats['MinStrike'].min().min(), year_for_analysis)
+    print('Min. SPX for {1}: {0}').format(day_stats['SPX'].min().min(), year_for_analysis)
 
     env = Environment(loader=FileSystemLoader('.'))
     template = env.get_template("myreport.html")
-    template_vars = {"title" : "AlgoSeek Options Data Report",
+    template_vars = {"title" : "AlgoSeek Options Data Report {0}".format(year_for_analysis),
                  "monthly_options_table": summary_stats.to_html(),
                  "daily_options_table": day_stats.to_html()}
     html_out = template.render(template_vars)
-    HTML(string=html_out).write_pdf("report.pdf")
+    with open("options_data_{0}.html".format(year_for_analysis), "wb") as fh:
+        fh.write(html_out)
+
     # load_data_all(all_data)

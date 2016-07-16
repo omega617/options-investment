@@ -5,10 +5,26 @@
     <title>{{ title }}</title>
 </head>
 <body>
+    <h1>{{ title }}</h1>
     <h2>AlgoSeek Monthly Options Data Summary</h2>
+    <li>TotalTrades : sum of daily trades over the month.</li>
+    <li>MinTrades : number of trades on day with the minimum number of trades in the month.</li>
+    <li>MaxTrades : number of trades on day with the maximum number of trades in the month.</li>
+    <li>Empties : number of days with no trades.</li>
+    <li>Under50 : number of days with trades < 50.</li>
+    <li>Under100 : number of days with 50 < trades < 100.</li>
+    <li>Under500 : number of days with 100 < trades < 500.</li>
+    <li>Under1000 : number of days with 500 < trades < 1000.</li>
+    <li>Over1000 : number of days with trades > 1000.</li>
+    <br>
      {{ monthly_options_table }}
     <br>
     <h2>AlgoSeek Daily Options Data Summary</h2>
+    <li>TotalTrades : sum of trades for the day (i.e. number of rows in CSV file).</li>
+    <li>MinStrike : minimum strike price with trade data for that day.</li>
+    <li>MaxStrike : maximum strike price with trade data for that day.</li>
+    <li>SPX : closing SPX for that day (from http://www.cboe.com/micro/spx/historicaldata.aspx).</li>
+    <br>
      {{ daily_options_table }}
 </body>
 </html>
