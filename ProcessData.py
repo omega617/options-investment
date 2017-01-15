@@ -1,3 +1,4 @@
+#from numba.cuda.tests.cudapy.test_blackscholes import black_scholes_cuda
 from pandas import read_csv, Series
 import pandas as pd
 import glob
@@ -9,10 +10,42 @@ from jinja2 import Environment, FileSystemLoader
 import math
 from itertools import tee
 import calendar
+import csv
 from pandas.tseries.offsets import BDay
 
+import mibian
+
+
+class UnicodeWriter:
+    """
+    A CSV writer which will write rows to CSV file "f",
+    which is encoded in the given encoding.
+    """
+
+    def __init__(self, f, dialect=csv.excel, **kwds):
+        self.csvfile = open(f, 'wb')
+        self.writer = csv.writer(self.csvfile, dialect=dialect, **kwds)
+        self.header_written = False
+
+    def writerow(self, row):
+        self.writer.writerow(row)
+
+    def writeheader(self, header):
+        if not self.header_written:
+            self.writer.writerow(header)
+            self.header_written = True
+
+    def writerows(self, rows):
+        for row in rows:
+            self.writerow(row)
+
+    def close(self):
+        self.csvfile.close()
+
+results_csv = UnicodeWriter('c:\\results.csv')
 contract_size = 100
-years_for_analysis = [2012]#, 2013, 2014, 2015, 2016]
+#years_for_analysis = [2012, 2013, 2014, 2015, 2016]
+years_for_analysis = [2013]
 # option_buying_style = 0 : buy only the trades that we saw
 # option_buying_style = 1 : use the premium for the trade we saw and assume we can get the quantity we want
 option_buying_style = 1
@@ -46,6 +79,20 @@ def black_scholes(callResult, putResult, stockPrice, optionStrike, optionYears, 
 
     expRT = np.exp(- R * T)
     callResult[:] = (S * cndd1 - X * expRT * cndd2)
+    putResult[:] = X * expRT * cnd(-d2) - (S * cnd(-d1))
+
+# use put-call parity to work out the put premium from the call premium
+# Equation:
+# C + X/(1 + r)^t - S0 = P
+#
+# C = call premium
+# P = put premium
+# X = Strike price of call and put
+# r = annual interest rate
+# t = time in years
+# S0 = initial price of underlying
+def put_from_call(call_premium, underlying, strike, rate, time):
+    return call_premium + (strike / math.pow((1 + rate), time)) - underlying
 
 def randfloat(rand_var, low, high):
     return (1.0 - rand_var) * low + rand_var * high
@@ -69,6 +116,12 @@ class TradeDays:
             result = []
         return result
 
+    def write(self):
+        return str(self.yearmonth_day)
+
+    def read(self, s):
+        self.yearmonth_day = dict(s)
+
 def load_data(filename):
     df = read_csv("c:/Temp/algoseek/", filename)
 
@@ -85,39 +138,58 @@ def load_spx_data():
     df = pd.read_excel(path+filename, index_col=0, header=0)
     return df
 
+from pandas.io.pickle import read_pickle
+import cPickle
+
 def load_options_data(month, year_for_analysis):
     date_for_data = str(year_for_analysis) + str(month)
-    path =r'C:/Temp/algoseek/TRADES_ONLY/' # use your path
-    allOptionDataFilesZipped = glob.glob(path + "/*.csv.bz2")
-    allOptionDataFilesZipped.sort()
-    options_data_frame = pd.DataFrame()
-    list_ = []
-    days_with_options_data = TradeDays()
-    print('Loading data for {0}'.format(date_for_data))
-    for zippedOptionsDataFile_ in allOptionDataFilesZipped:
-        if zippedOptionsDataFile_.__contains__(str(date_for_data)):
-            file_ = bz2.BZ2File(zippedOptionsDataFile_)
-            df = pd.read_csv(file_, index_col=None, header=0, parse_dates=['Expiration'])
-            # extract the trade date from the zip file
-            # re_result = re.search('(20\d{2})(\d{2})(\d{2})', zippedFile_)
-            options_trade_date = re.search('(20\d{2})(\d{2})(\d{2})', zippedOptionsDataFile_)
-            # add the extracted trade date as another column
-            year = options_trade_date.group(1)
-            month = options_trade_date.group(2)
-            day = options_trade_date.group(3)
-            df['Date'] = Series(np.repeat(pd.Period(options_trade_date.group(0)), len(df)), index=df.index)
-            df['Year'] = Series(np.repeat(year, len(df)), index=df.index)
-            df['Month'] = Series(np.repeat(month, len(df)), index=df.index)
-            df['Day'] = Series(np.repeat(day, len(df)), index=df.index)
-            days_with_options_data.add_day(year, month, day)
-            list_.append(df)
-    if list_:
-        options_data_frame = pd.concat(list_)
-        options_data_frame = options_data_frame.set_index(['Date'])
-    else:
-        options_data_frame = pd.DataFrame()
-    return options_data_frame, days_with_options_data
 
+    # check for pickled pandas data first
+    path_for_pandas = 'C:/Temp/pandas/pandas_' + date_for_data
+    path_for_dates = 'C:/Temp/pandas/days_' + date_for_data
+    try:
+        options_data_frame = read_pickle(path_for_pandas)
+        with open(path_for_dates, 'rb') as pickle_file:
+            days_with_options_data = cPickle.load(pickle_file)
+        return options_data_frame, days_with_options_data
+    except:
+        # otherwise go with loading from zip files (and save to pandas)
+        path =r'C:/Temp/algoseek/TRADES_ONLY/' # use your path
+        allOptionDataFilesZipped = glob.glob(path + "/*.csv.bz2")
+        allOptionDataFilesZipped.sort()
+        options_data_frame = pd.DataFrame()
+        list_ = []
+        days_with_options_data = TradeDays()
+        print('Loading data for {0}'.format(date_for_data))
+        for zippedOptionsDataFile_ in allOptionDataFilesZipped:
+            if zippedOptionsDataFile_.__contains__(str(date_for_data)):
+                file_ = bz2.BZ2File(zippedOptionsDataFile_)
+                df = pd.read_csv(file_, index_col=None, header=0, parse_dates=['Expiration'])
+                # extract the trade date from the zip file
+                # re_result = re.search('(20\d{2})(\d{2})(\d{2})', zippedFile_)
+                options_trade_date = re.search('(20\d{2})(\d{2})(\d{2})', zippedOptionsDataFile_)
+                # add the extracted trade date as another column
+                year = options_trade_date.group(1)
+                month = options_trade_date.group(2)
+                day = options_trade_date.group(3)
+                df['Date'] = Series(np.repeat(pd.Period(options_trade_date.group(0)), len(df)), index=df.index)
+                df['Year'] = Series(np.repeat(year, len(df)), index=df.index)
+                df['Month'] = Series(np.repeat(month, len(df)), index=df.index)
+                df['Day'] = Series(np.repeat(day, len(df)), index=df.index)
+                days_with_options_data.add_day(year, month, day)
+                list_.append(df)
+        if list_:
+            options_data_frame = pd.concat(list_)
+            options_data_frame = options_data_frame.set_index(['Date'])
+        else:
+            options_data_frame = pd.DataFrame()
+
+        # if not saved already
+
+        options_data_frame.to_pickle(path_for_pandas)
+        with open(path_for_dates, 'wb') as pickle_file:
+            cPickle.dump(days_with_options_data, pickle_file)
+        return options_data_frame, days_with_options_data
 
 
 def process_day(bankroll, year_for_analysis, int_month, today, expiration_to_buy, month_frame, summary_stats):
@@ -133,11 +205,12 @@ def process_day(bankroll, year_for_analysis, int_month, today, expiration_to_buy
 
     # create criterion to select only options with 'expiration_to_buy'
     expiration_criterion = day_frame['Expiration'].map(lambda x: x.date() == expiration_to_buy.date())
+
     # create criterion to select only put options
-    put_criterion = day_frame['PutCall'].map(lambda x: x == 'P')
+    #put_criterion = day_frame['PutCall'].map(lambda x: x == 'P')
 
     # select only those options from the day's trade data
-    options_with_expiration = day_frame[expiration_criterion & put_criterion]
+    options_with_expiration = day_frame[expiration_criterion] #& put_criterion]
 
     # sort the options by how close they are to the strike we want (SPX - 30%)
     option = options_with_expiration.ix[((options_with_expiration.Strike / 10000) - spx_minus_30).abs().argsort()[:]]
@@ -166,7 +239,13 @@ def process_day(bankroll, year_for_analysis, int_month, today, expiration_to_buy
             bankroll = bankroll - cost
             cheapest_option_index += 1
         elif option_buying_style == 1:
-            contract.Quantity = math.ceil(bankroll / ((contract.Premium / 10000.0) * contract_size))
+            if contract.PutCall == 'C':
+                print('Using put-call parity, prem={0}, spx={1}, strike={2}'.format(contract.Premium, spx_day, contract.Strike))
+                premium_to_use = put_from_call(contract.Premium, spx_day, contract.Strike, RISKFREE, 0.25)
+            else:
+                premium_to_use = contract.Premium
+
+            contract.Quantity = math.ceil(bankroll / ((premium_to_use / 10000.0) * contract_size))
             cost = (contract.Premium / 10000.0) * contract_size * contract.Quantity
             contract.Strike = (contract.Strike / 10000.0)
             contract['SPX'] = spx_day
@@ -196,10 +275,10 @@ def sell_positions(bankroll, open_positions, today, int_month, year_for_analysis
     expiration_criterion = day_frame['Expiration'].map(lambda x: x.date() == expiration_to_sell.date())
 
     # create criterion to select only put options
-    put_criterion = day_frame['PutCall'].map(lambda x: x == 'P')
+    #put_criterion = day_frame['PutCall'].map(lambda x: x == 'P')
 
     # select only those options from the day's trade data
-    options_with_expiration = day_frame[expiration_criterion & put_criterion]
+    options_with_expiration = day_frame[expiration_criterion] # & put_criterion]
 
     open_positions_cost = 0.0
     for index, open_position in open_positions.iterrows():
@@ -208,23 +287,61 @@ def sell_positions(bankroll, open_positions, today, int_month, year_for_analysis
         closest_sold_option = options_with_expiration.ix[((options_with_expiration.Strike / 10000) - position_to_sell_strike).abs().argsort()[:]]
         spx_today = spx_data_frame.ix[datetime.datetime(year_for_analysis, int_month, today, 0, 0)]['SPX'] / 10
 
+        # change size_contract_method to anything else to size based on bankroll
+        size_contract_method = "spitznagel"
         i = 0
         # % of portfolio to invest into options for the tail hedge
         hedge_percent = 0.005
         while open_position.Quantity > 0:
-            amount_to_buy = bankroll * hedge_percent
-            contract_cost = open_position.Premium / 10000.0 * contract_size
-            # we can only buy whole numbers of contracts, so use math.ceil
-            open_position_contract_size = math.floor(amount_to_buy / contract_cost)
-            open_positions_cost += open_position_contract_size * contract_cost
             # float(open_position.Quantity * (open_position.Premium / (bankroll * hedge_percent)) * contract_size)
             matched_strike = closest_sold_option.ix[i].Strike / 10000.0
+
             # get a premium that is as close as possible to that we should get paid
-            matched_strike_premium = (float(closest_sold_option.ix[i].Premium) / 10000.0)
+            if closest_sold_option.ix[i].PutCall == 'P':
+                matched_strike_premium = (float(closest_sold_option.ix[i].Premium) / 10000.0)
+            else:
+                print('Using put-call parity, prem={0}, spx={1}, strike={2}'.format(closest_sold_option.ix[i].Premium, spx_today, closest_sold_option.ix[i].Strike))
+                matched_strike_premium = put_from_call(closest_sold_option.ix[i].Premium, spx_today, matched_strike, RISKFREE, 1./6.)
             if (matched_strike == position_to_sell_strike):
                 premium = matched_strike_premium
             else:
                 premium = matched_strike_premium * (float(position_to_sell_strike) / float(matched_strike))
+
+            # Use  Black-Scholes pricing so that we size the number of contracts according to how
+            # much we think the future option will be worth in the case of a 20% drop in the underlying (SPY)
+            callResult = np.empty(shape=1)
+            putResult = np.empty(shape=1)
+
+            # XXX - if the matched strike isn't close enough to our
+            # c = mibian.BS([open_position.SPX, position_to_sell_strike, RISKFREE*100, 90], putPrice=premium)
+
+            # firstly, how much does Black-Scholes estimate the open position premium should be?
+            # just calculate and print for interest (not actually used)
+            black_scholes(callResult, putResult, stockPrice=open_position.SPX, optionStrike=position_to_sell_strike, optionYears=0.25, Riskfree=RISKFREE, Volatility=VOLATILITY)
+            print('Black-Scholes premium={0}, current premium={1}, paid premium={2}'.format(putResult[0], premium, open_position.Premium / 10000.0))
+
+            # secondly, how much does Black-Scholes estimate the position premium will be in the future if the market
+            # drops 20%
+            # XXX - getting call result but need the put result
+            percent_drop = 0.2
+            black_scholes(callResult, putResult, stockPrice=(open_position.SPX - (0.2 * open_position.SPX)), optionStrike=position_to_sell_strike, optionYears=1./6., Riskfree=RISKFREE, Volatility=VOLATILITY)
+            print('Black-Scholes premium={0}, current premium={1}, paid premium={2}'.format(putResult[0], premium, open_position.Premium / 10000.0))
+
+            contract_cost = open_position.Premium / 10000.0 * contract_size
+
+            if size_contract_method == "spitznagel":
+                option_delta = putResult - premium # e.g. 7 - 0.3 = 6.7
+                bankroll_drop_from_crash = bankroll * percent_drop # e.g. 1,000,000 * 0.2 = 200,000
+                # amount to buy should give us an increase to cover the amount lost in the portfolio
+                # 200,000 / 6.7 = 29,850
+                # each contract is for 100 so would be 29,850 / 100 = 298
+                open_position_contract_size = math.floor(bankroll_drop_from_crash / option_delta / contract_size)
+            else:
+                amount_to_buy = bankroll * hedge_percent
+                # we can only buy whole numbers of contracts, so use math.ceil
+                open_position_contract_size = math.floor(amount_to_buy / contract_cost)
+
+            open_positions_cost += open_position_contract_size * contract_cost
 
             #print('Selling open position ({4} contracts) with strike {0} for {1} (premium for strike {2}, {3})'.format(position_to_sell_strike, premium, matched_strike, (float(closest_sold_option.ix[i].Premium) / 10000.0), open_position.Quantity))
             # loop over open positions, selling until we've sold all our equivalent positions
@@ -234,7 +351,7 @@ def sell_positions(bankroll, open_positions, today, int_month, year_for_analysis
             open_position.Quantity = 0#open_position.Quantity - 1
             #closest_sold_option.ix[i].Quantity = closest_sold_option.ix[i].Quantity - 1
             i += 1
-    print('Bought open positions (Strike={4}, Premium={5}, SPX={6}) for {0} sold for {1} (profit = {8}) (Strike={2}, Premium={3}, SPX={7})'.format(
+    print('Bought {9} contracts for open positions (Strike={4}, Premium={5}, SPX={6}) for {0} sold for {1} (profit = {8}) (Strike={2}, Premium={3}, SPX={7})'.format(
         open_positions_cost,
         profit_from_sell,
         matched_strike,
@@ -243,9 +360,11 @@ def sell_positions(bankroll, open_positions, today, int_month, year_for_analysis
         open_position.Premium/10000.0,
         open_position.SPX,
         spx_today,
-        add_to_bankroll
+        add_to_bankroll,
+        open_position_contract_size
         )
     )
+
     if spx_today < open_position.SPX:
         print('SPX has dropped')
     spx_invest = bankroll * (1 - hedge_percent)
@@ -257,6 +376,23 @@ def sell_positions(bankroll, open_positions, today, int_month, year_for_analysis
         spx_profit
         )
     )
+
+    results_csv.writeheader(['Date', '# Contracts', 'Bought $', 'Sold $', 'Sold Strike', 'Sold Prem.', 'Bought Strike', 'Bought Prem.', 'SPY @ Buy', 'SPY @ Sell', 'SPY Invest', 'SPY Profit'])
+    results_csv.writerow([
+            today_date,
+            open_position_contract_size,
+            open_positions_cost,
+            profit_from_sell,
+            matched_strike,
+            premium,
+            position_to_sell_strike,
+            open_position.Premium/10000.0,
+            open_position.SPX,
+            spx_today,
+            spx_profit,
+            add_to_bankroll]
+        )
+
     return add_to_bankroll, spx_profit
 
 # buy option today if:
@@ -317,8 +453,8 @@ if __name__ == '__main__':
         summary_stats = pd.DataFrame(columns=columns, index=pd.PeriodIndex(start='1/{0}'.format(year_for_analysis), end='12/{0}'.format(year_for_analysis), freq='M'))
         summary_stats.fillna({'TotalTrades':0, 'MaxTrades':0, 'Empties':0, 'Under50':0, 'Under100':0, 'Under500':0, 'Under1000':0, 'Over1000':0}, inplace=True)
 
-        months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
-        #months = ['04', '05', '06', '07', '08', '09', '10', '11', '12']
+        #months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+        months = ['03', '04', '05', '06', '07']
         total_bankroll = 200000
         bankroll = total_bankroll * 0.005
         open_positions = pd.DataFrame()
@@ -345,8 +481,8 @@ if __name__ == '__main__':
 
                 if not open_positions.empty:
                     open_positions = open_positions.T
-                    for open_position_expiration in set(open_positions.Expiration):
 
+                    for open_position_expiration in set(open_positions.Expiration):
                         gap = abs(open_position_expiration - today_date)
                         if gap <= datetime.timedelta(60):
                             print("Sell today! day_date : {0}, expiration {1}, gap : {2} days".format(today_date.date(), open_position_expiration.date(), gap.days))
@@ -357,7 +493,6 @@ if __name__ == '__main__':
                             if initial_spx == 0:
                                 initial_spx = positions_to_sell.ix[0].SPX
                             final_spx = positions_to_sell.ix[0].SPX
-
                             options_pnl, spx_pnl = sell_positions(total_bankroll, positions_to_sell, today, int_month, year_for_analysis, month_frame)
                             open_positions = open_positions[open_position_expiration_criterion != True]
                             pnl = spx_pnl + options_pnl
@@ -377,15 +512,18 @@ if __name__ == '__main__':
                         open_positions = open_positions.join(new_open_positions)
 
         print("Running PNL options : {0}".format(running_pnl_options))
+
         spx_invest = (1 - 0.005) * total_bankroll
         spx_profit = spx_invest * ((final_spx - initial_spx) / initial_spx)
-        print('SPX @ open {0}, @ close {1}, invested : {2}, profit : {3}'.format(
+        print('SPX buy and hold for same period : @ open {0}, @ close {1}, invested : {2}, profit : {3}'.format(
             initial_spx,
             final_spx,
             spx_invest,
             spx_profit
             )
         )
+
+    results_csv.close()
                 # work out buy
         #     day_columns = ['TotalTrades', 'MinStrike', 'MaxStrike', 'SPX']
         #     day_stats_ = pd.DataFrame(columns=day_columns, index=pd.PeriodIndex(day_dates, freq='D'))
